@@ -148,7 +148,7 @@ func PostHook(c *gin.Context) {
 		if len(os.Getenv("DRONE_SERVER_YAML_FALLBACK")) > 0 {
 			// download it
 			resp, err := http.Get(fmt.Sprintf("%s?user=%s&repo=%s",
-				os.Getenv("DRONE_SERVER_YAML_FALLBACK"), user, repo))
+				os.Getenv("DRONE_SERVER_YAML_FALLBACK"), user.Login, repo.FullName))
 			if err != nil {
 				logrus.Errorf("failure to get build config for %s. %s", repo.FullName, err)
 				c.AbortWithError(404, err)

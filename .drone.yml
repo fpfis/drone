@@ -48,7 +48,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
-      branch: master
+      branch: release/*
       event: push
 
   publish_agent_amd64:
@@ -58,7 +58,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
-      branch: master
+      branch: release/*
       event: push
 
   release_server:

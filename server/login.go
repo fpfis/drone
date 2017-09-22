@@ -81,6 +81,11 @@ func HandleAuth(c *gin.Context) {
 			),
 		}
 
+		if err = Config.Services.Limiter.LimitUser(u); err != nil {
+			c.String(403, "User activation blocked by limiter")
+			return
+		}
+
 		// insert the user into the database
 		if err := store.CreateUser(c, u); err != nil {
 			logrus.Errorf("cannot insert %s. %s", u.Login, err)
@@ -112,7 +117,7 @@ func HandleAuth(c *gin.Context) {
 		return
 	}
 
-	exp := time.Now().Add(time.Hour * 72).Unix()
+	exp := time.Now().Add(Config.Server.SessionExpires).Unix()
 	token := token.New(token.SessToken, u.Login)
 	tokenstr, err := token.SignExpires(u.Hash, exp)
 	if err != nil {
@@ -152,7 +157,7 @@ func GetLoginToken(c *gin.Context) {
 		return
 	}
 
-	exp := time.Now().Add(time.Hour * 72).Unix()
+	exp := time.Now().Add(Config.Server.SessionExpires).Unix()
 	token := token.New(token.SessToken, user.Login)
 	tokenstr, err := token.SignExpires(user.Hash, exp)
 	if err != nil {

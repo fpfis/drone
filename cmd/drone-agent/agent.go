@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/ioutil"
-	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
@@ -17,10 +17,12 @@ import (
 	"github.com/cncd/pipeline/pipeline"
 	"github.com/cncd/pipeline/pipeline/backend"
 	"github.com/cncd/pipeline/pipeline/backend/docker"
-	"github.com/cncd/pipeline/pipeline/interrupt"
 	"github.com/cncd/pipeline/pipeline/multipart"
 	"github.com/cncd/pipeline/pipeline/rpc"
 
+	"github.com/drone/signal"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/tevino/abool"
 	"github.com/urfave/cli"
 	oldcontext "golang.org/x/net/context"
@@ -31,11 +33,34 @@ func loop(c *cli.Context) error {
 		Labels: map[string]string{
 			"platform": c.String("platform"),
 		},
+		Expr: c.String("drone-filter"),
 	}
 
 	hostname := c.String("hostname")
 	if len(hostname) == 0 {
 		hostname, _ = os.Hostname()
+	}
+
+	if c.BoolT("debug") {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	}
+
+	if c.Bool("pretty") {
+		log.Logger = log.Output(
+			zerolog.ConsoleWriter{
+				Out:     os.Stderr,
+				NoColor: c.BoolT("nocolor"),
+			},
+		)
+	}
+
+	counter.Polling = c.Int("max-procs")
+	counter.Running = 0
+
+	if c.BoolT("healthcheck") {
+		go http.ListenAndServe(":3000", nil)
 	}
 
 	// TODO pass version information to grpc server
@@ -64,7 +89,7 @@ func loop(c *cli.Context) error {
 		context.Background(),
 		metadata.Pairs("hostname", hostname),
 	)
-	ctx = interrupt.WithContextFunc(ctx, func() {
+	ctx = signal.WithContextFunc(ctx, func() {
 		println("ctrl+c received, terminating process")
 		sigterm.Set()
 	})
@@ -80,8 +105,13 @@ func loop(c *cli.Context) error {
 				if sigterm.IsSet() {
 					return
 				}
-				if err := run(ctx, client, filter); err != nil {
-					log.Printf("build runner encountered error: exiting: %s", err)
+				r := runner{
+					client:   client,
+					filter:   filter,
+					hostname: hostname,
+				}
+				if err := r.run(ctx); err != nil {
+					log.Error().Err(err).Msg("pipeline done with error")
 					return
 				}
 			}
@@ -92,31 +122,34 @@ func loop(c *cli.Context) error {
 	return nil
 }
 
+// NOTE we need to limit the size of the logs and files that we upload.
+// The maximum grpc payload size is 4194304. So until we implement streaming
+// for uploads, we need to set these limits below the maximum.
 const (
-	maxFileUpload = 5000000
-	maxLogsUpload = 5000000
+	maxLogsUpload = 2000000 // this is per step
+	maxFileUpload = 1000000
 )
 
-func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
-	log.Println("pipeline: request next execution")
+type runner struct {
+	client   rpc.Peer
+	filter   rpc.Filter
+	hostname string
+}
+
+func (r *runner) run(ctx context.Context) error {
+	log.Debug().
+		Msg("request next execution")
 
 	meta, _ := metadata.FromOutgoingContext(ctx)
 	ctxmeta := metadata.NewOutgoingContext(context.Background(), meta)
 
 	// get the next job from the queue
-	work, err := client.Next(ctx, filter)
+	work, err := r.client.Next(ctx, r.filter)
 	if err != nil {
 		return err
 	}
 	if work == nil {
 		return nil
-	}
-	log.Printf("pipeline: received next execution: %s", work.ID)
-
-	// new docker engine
-	engine, err := docker.NewEnv()
-	if err != nil {
-		return err
 	}
 
 	timeout := time.Hour
@@ -124,17 +157,51 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		timeout = time.Duration(minutes) * time.Minute
 	}
 
+	counter.Add(
+		work.ID,
+		timeout,
+		extractRepositoryName(work.Config), // hack
+		extractBuildNumber(work.Config),    // hack
+	)
+	defer counter.Done(work.ID)
+
+	logger := log.With().
+		Str("repo", extractRepositoryName(work.Config)). // hack
+		Str("build", extractBuildNumber(work.Config)).   // hack
+		Str("id", work.ID).
+		Logger()
+
+	logger.Debug().
+		Msg("received execution")
+
+	// new docker engine
+	engine, err := docker.NewEnv()
+	if err != nil {
+		logger.Error().
+			Err(err).
+			Msg("cannot create docker client")
+
+		return err
+	}
+
 	ctx, cancel := context.WithTimeout(ctxmeta, timeout)
 	defer cancel()
 
 	cancelled := abool.New()
 	go func() {
-		if werr := client.Wait(ctx, work.ID); werr != nil {
+		logger.Debug().
+			Msg("listen for cancel signal")
+
+		if werr := r.client.Wait(ctx, work.ID); werr != nil {
 			cancelled.SetTo(true)
-			log.Printf("pipeline: cancel signal received: %s: %s", work.ID, werr)
+			logger.Warn().
+				Err(werr).
+				Msg("cancel signal received")
+
 			cancel()
 		} else {
-			log.Printf("pipeline: cancel channel closed: %s", work.ID)
+			logger.Debug().
+				Msg("stop listening for cancel signal")
 		}
 	}()
 
@@ -142,24 +209,37 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Printf("pipeline: cancel ping loop: %s", work.ID)
+				logger.Debug().
+					Msg("pipeline done")
+
 				return
 			case <-time.After(time.Minute):
-				log.Printf("pipeline: ping queue: %s", work.ID)
-				client.Extend(ctx, work.ID)
+				logger.Debug().
+					Msg("pipeline lease renewed")
+
+				r.client.Extend(ctx, work.ID)
 			}
 		}
 	}()
 
 	state := rpc.State{}
 	state.Started = time.Now().Unix()
-	err = client.Init(ctxmeta, work.ID, state)
+
+	err = r.client.Init(ctxmeta, work.ID, state)
 	if err != nil {
-		log.Printf("pipeline: error signaling pipeline init: %s: %s", work.ID, err)
+		logger.Error().
+			Err(err).
+			Msg("pipeline initialization failed")
 	}
 
 	var uploads sync.WaitGroup
 	defaultLogger := pipeline.LogFunc(func(proc *backend.Step, rc multipart.Reader) error {
+
+		loglogger := logger.With().
+			Str("image", proc.Image).
+			Str("stage", proc.Alias).
+			Logger()
+
 		part, rerr := rc.NextPart()
 		if rerr != nil {
 			return rerr
@@ -173,9 +253,13 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 			}
 		}
 
+		loglogger.Debug().Msg("log stream opened")
+
 		limitedPart := io.LimitReader(part, maxLogsUpload)
-		logstream := rpc.NewLineWriter(client, work.ID, proc.Alias, secrets...)
+		logstream := rpc.NewLineWriter(r.client, work.ID, proc.Alias, secrets...)
 		io.Copy(logstream, limitedPart)
+
+		loglogger.Debug().Msg("log stream copied")
 
 		file := &rpc.File{}
 		file.Mime = "application/json+logs"
@@ -185,14 +269,22 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		file.Size = len(file.Data)
 		file.Time = time.Now().Unix()
 
-		if serr := client.Upload(ctxmeta, work.ID, file); serr != nil {
-			log.Printf("pipeline: cannot upload logs: %s: %s: %s", work.ID, file.Mime, serr)
-		} else {
-			log.Printf("pipeline: finish uploading logs: %s: step %s: %s", file.Mime, work.ID, proc.Alias)
+		loglogger.Debug().
+			Msg("log stream uploading")
+
+		if serr := r.client.Upload(ctxmeta, work.ID, file); serr != nil {
+			loglogger.Error().
+				Err(serr).
+				Msg("log stream upload error")
 		}
 
+		loglogger.Debug().
+			Msg("log stream upload complete")
+
 		defer func() {
-			log.Printf("pipeline: finish uploading logs: %s: step %s", work.ID, proc.Alias)
+			loglogger.Debug().
+				Msg("log stream closed")
+
 			uploads.Done()
 		}()
 
@@ -209,16 +301,40 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		file.Data, _ = ioutil.ReadAll(limitedPart)
 		file.Size = len(file.Data)
 		file.Time = time.Now().Unix()
+		file.Meta = map[string]string{}
 
-		if serr := client.Upload(ctxmeta, work.ID, file); serr != nil {
-			log.Printf("pipeline: cannot upload artifact: %s: %s: %s", work.ID, file.Mime, serr)
-		} else {
-			log.Printf("pipeline: finish uploading artifact: %s: step %s: %s", file.Mime, work.ID, proc.Alias)
+		for key, value := range part.Header() {
+			file.Meta[key] = value[0]
 		}
+
+		loglogger.Debug().
+			Str("file", file.Name).
+			Str("mime", file.Mime).
+			Msg("file stream uploading")
+
+		if serr := r.client.Upload(ctxmeta, work.ID, file); serr != nil {
+			loglogger.Error().
+				Err(serr).
+				Str("file", file.Name).
+				Str("mime", file.Mime).
+				Msg("file stream upload error")
+		}
+
+		loglogger.Debug().
+			Str("file", file.Name).
+			Str("mime", file.Mime).
+			Msg("file stream upload complete")
 		return nil
 	})
 
 	defaultTracer := pipeline.TraceFunc(func(state *pipeline.State) error {
+		proclogger := logger.With().
+			Str("image", state.Pipeline.Step.Image).
+			Str("stage", state.Pipeline.Step.Alias).
+			Int("exit_code", state.Process.ExitCode).
+			Bool("exited", state.Process.Exited).
+			Logger()
+
 		procState := rpc.State{
 			Proc:     state.Pipeline.Step.Alias,
 			Exited:   state.Process.Exited,
@@ -227,9 +343,17 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 			Finished: time.Now().Unix(),
 		}
 		defer func() {
-			if uerr := client.Update(ctxmeta, work.ID, procState); uerr != nil {
-				log.Printf("Pipeine: error updating pipeline step status: %s: %s: %s", work.ID, procState.Proc, uerr)
+			proclogger.Debug().
+				Msg("update step status")
+
+			if uerr := r.client.Update(ctxmeta, work.ID, procState); uerr != nil {
+				proclogger.Debug().
+					Err(uerr).
+					Msg("update step status error")
 			}
+
+			proclogger.Debug().
+				Msg("update step status complete")
 		}()
 		if state.Process.Exited {
 			return nil
@@ -237,6 +361,8 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		if state.Pipeline.Step.Environment == nil {
 			state.Pipeline.Step.Environment = map[string]string{}
 		}
+
+		state.Pipeline.Step.Environment["DRONE_MACHINE"] = r.hostname
 		state.Pipeline.Step.Environment["CI_BUILD_STATUS"] = "success"
 		state.Pipeline.Step.Environment["CI_BUILD_STARTED"] = strconv.FormatInt(state.Pipeline.Time, 10)
 		state.Pipeline.Step.Environment["CI_BUILD_FINISHED"] = strconv.FormatInt(time.Now().Unix(), 10)
@@ -282,17 +408,31 @@ func run(ctx context.Context, client rpc.Peer, filter rpc.Filter) error {
 		}
 	}
 
-	log.Printf("pipeline: execution complete: %s", work.ID)
+	logger.Debug().
+		Str("error", state.Error).
+		Int("exit_code", state.ExitCode).
+		Msg("pipeline complete")
+
+	logger.Debug().
+		Msg("uploading logs")
 
 	uploads.Wait()
 
-	log.Printf("pipeline: logging complete: %s", work.ID)
+	logger.Debug().
+		Msg("uploading logs complete")
 
-	err = client.Done(ctxmeta, work.ID, state)
+	logger.Debug().
+		Str("error", state.Error).
+		Int("exit_code", state.ExitCode).
+		Msg("updating pipeline status")
+
+	err = r.client.Done(ctxmeta, work.ID, state)
 	if err != nil {
-		log.Printf("Pipeine: error signaling pipeline done: %s: %s", work.ID, err)
+		logger.Error().Err(err).
+			Msg("updating pipeline status failed")
 	} else {
-		log.Printf("pipeline: done: %s", work.ID)
+		logger.Debug().
+			Msg("updating pipeline status complete")
 	}
 
 	return nil
@@ -312,4 +452,14 @@ func (c *credentials) GetRequestMetadata(oldcontext.Context, ...string) (map[str
 
 func (c *credentials) RequireTransportSecurity() bool {
 	return false
+}
+
+// extract repository name from the configuration
+func extractRepositoryName(config *backend.Config) string {
+	return config.Stages[0].Steps[0].Environment["DRONE_REPO"]
+}
+
+// extract build number from the configuration
+func extractBuildNumber(config *backend.Config) string {
+	return config.Stages[0].Steps[0].Environment["DRONE_BUILD_NUMBER"]
 }

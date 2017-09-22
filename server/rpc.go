@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	oldcontext "golang.org/x/net/context"
 
@@ -22,6 +23,8 @@ import (
 	"github.com/drone/drone/model"
 	"github.com/drone/drone/remote"
 	"github.com/drone/drone/store"
+
+	"github.com/drone/expr"
 )
 
 // This file is a complete disaster because I'm trying to wedge in some
@@ -38,6 +41,7 @@ var Config = struct {
 		Secrets    model.SecretService
 		Registries model.RegistryService
 		Environ    model.EnvironService
+		Limiter    model.Limiter
 	}
 	Storage struct {
 		// Users  model.UserStore
@@ -51,11 +55,13 @@ var Config = struct {
 		// Secrets model.SecretStore
 	}
 	Server struct {
-		Key  string
-		Cert string
-		Host string
-		Port string
-		Pass string
+		Key            string
+		Cert           string
+		Host           string
+		Port           string
+		Pass           string
+		RepoConfig     string
+		SessionExpires time.Duration
 		// Open bool
 		// Orgs map[string]struct{}
 		// Admins map[string]struct{}
@@ -87,13 +93,9 @@ func (s *RPC) Next(c context.Context, filter rpc.Filter) (*rpc.Pipeline, error) 
 		}
 	}
 
-	fn := func(task *queue.Task) bool {
-		for k, v := range filter.Labels {
-			if task.Labels[k] != v {
-				return false
-			}
-		}
-		return true
+	fn, err := createFilterFunc(filter)
+	if err != nil {
+		return nil, err
 	}
 	task, err := s.queue.Poll(c, fn)
 	if err != nil {
@@ -174,6 +176,9 @@ func (s *RPC) Update(c context.Context, id string, state rpc.State) error {
 		if state.ExitCode != 0 || state.Error != "" {
 			proc.State = model.StatusFailure
 		}
+		if state.ExitCode == 137 {
+			proc.State = model.StatusKilled
+		}
 	} else {
 		proc.Started = state.Started
 		proc.State = model.StatusRunning
@@ -232,7 +237,7 @@ func (s *RPC) Upload(c context.Context, id string, file *rpc.File) error {
 		)
 	}
 
-	return Config.Storage.Files.FileCreate(&model.File{
+	report := &model.File{
 		BuildID: proc.BuildID,
 		ProcID:  proc.ID,
 		PID:     proc.PID,
@@ -240,7 +245,35 @@ func (s *RPC) Upload(c context.Context, id string, file *rpc.File) error {
 		Name:    file.Name,
 		Size:    file.Size,
 		Time:    file.Time,
-	},
+	}
+	if d, ok := file.Meta["X-Tests-Passed"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Tests-Failed"]; ok {
+		report.Failed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Tests-Skipped"]; ok {
+		report.Skipped, _ = strconv.Atoi(d)
+	}
+
+	if d, ok := file.Meta["X-Checks-Passed"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Checks-Failed"]; ok {
+		report.Failed, _ = strconv.Atoi(d)
+	}
+
+	if d, ok := file.Meta["X-Coverage-Lines"]; ok {
+		report.Passed, _ = strconv.Atoi(d)
+	}
+	if d, ok := file.Meta["X-Coverage-Total"]; ok {
+		if total, _ := strconv.Atoi(d); total != 0 {
+			report.Failed = total - report.Passed
+		}
+	}
+
+	return Config.Storage.Files.FileCreate(
+		report,
 		bytes.NewBuffer(file.Data),
 	)
 }
@@ -439,6 +472,32 @@ func (s *RPC) checkCancelled(pipeline *rpc.Pipeline) (bool, error) {
 	return false, err
 }
 
+func createFilterFunc(filter rpc.Filter) (queue.Filter, error) {
+	var st *expr.Selector
+	var err error
+
+	if filter.Expr != "" {
+		st, err = expr.ParseString(filter.Expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return func(task *queue.Task) bool {
+		if st != nil {
+			match, _ := st.Eval(expr.NewRow(task.Labels))
+			return match
+		}
+
+		for k, v := range filter.Labels {
+			if task.Labels[k] != v {
+				return false
+			}
+		}
+		return true
+	}, nil
+}
+
 //
 //
 //
@@ -579,7 +638,9 @@ func (s *DroneServer) Upload(c oldcontext.Context, req *proto.UploadRequest) (*p
 		Proc: req.GetFile().GetProc(),
 		Size: int(req.GetFile().GetSize()),
 		Time: req.GetFile().GetTime(),
+		Meta: req.GetFile().GetMeta(),
 	}
+
 	res := new(proto.Empty)
 	err := peer.Upload(c, req.GetId(), file)
 	return res, err

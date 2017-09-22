@@ -226,6 +226,11 @@ func PostHook(c *gin.Context) {
 		}
 	}
 
+	if err = Config.Services.Limiter.LimitBuild(user, repo, build); err != nil {
+		c.String(403, "Build blocked by limiter")
+		return
+	}
+
 	build.Trim()
 	err = store.CreateBuild(c, build, build.Procs...)
 	if err != nil {
@@ -351,10 +356,11 @@ func PostHook(c *gin.Context) {
 		task := new(queue.Task)
 		task.ID = fmt.Sprint(item.Proc.ID)
 		task.Labels = map[string]string{}
-		task.Labels["platform"] = item.Platform
 		for k, v := range item.Labels {
 			task.Labels[k] = v
 		}
+		task.Labels["platform"] = item.Platform
+		task.Labels["repo"] = b.Repo.FullName
 
 		task.Data, _ = json.Marshal(rpc.Pipeline{
 			ID:      fmt.Sprint(item.Proc.ID),
@@ -559,7 +565,7 @@ func (b *builder) Build() ([]*buildItem, error) {
 			),
 			compiler.WithEnviron(proc.Environ),
 			compiler.WithProxy(),
-			compiler.WithWorkspaceFromURL("/drone", b.Curr.Link),
+			compiler.WithWorkspaceFromURL("/drone", b.Repo.Link),
 			compiler.WithMetadata(metadata),
 		).Compile(parsed)
 

@@ -46,16 +46,6 @@ pipeline:
       branch: master
       event: push
 
-  publish_agent:
-    image: plugins/docker
-    repo: drone/agent
-    dockerfile: Dockerfile.agent
-    secrets: [ docker_username, docker_password ]
-    tag: [ latest ]
-    when:
-      branch: master
-      event: push
-
   publish_agent_arm:
     image: plugins/docker
     repo: drone/agent
@@ -76,11 +66,21 @@ pipeline:
       branch: master
       event: push
 
+  publish_agent_amd64:
+    image: plugins/docker
+    repo: drone/agent
+    dockerfile: Dockerfile.agent
+    secrets: [ docker_username, docker_password ]
+    tag: [ latest ]
+    when:
+      branch: master
+      event: push
+
   release_server:
     image: plugins/docker
     repo: drone/drone
     secrets: [ docker_username, docker_password ]
-    tag: [ 0.8, 0.8.0, 0.8.0-rc.3 ]
+    tag: [ 0.8, 0.8.0 ]
     when:
       event: tag
 
@@ -89,15 +89,9 @@ pipeline:
     repo: drone/agent
     dockerfile: Dockerfile.agent
     secrets: [ docker_username, docker_password ]
-    tag: [ 0.8, 0.8.0, 0.8.0-rc.3 ]
+    tag: [ 0.8, 0.8.0 ]
     when:
       event: tag
-
-  notify:
-    image: plugins/gitter
-    secrets: [ gitter_webhook ]
-    when:
-      status: [ success, failure ]
 
 services:
   postgres:

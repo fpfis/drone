@@ -15,7 +15,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/lucas-clemente/quic-go/h2quic"
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sync/errgroup"
 
@@ -92,6 +91,18 @@ var flags = []cli.Flag{
 		EnvVar: "DRONE_OPEN",
 		Name:   "open",
 		Usage:  "open user registration",
+	},
+	cli.StringFlag{
+		EnvVar: "DRONE_REPO_CONFIG",
+		Name:   "repo-config",
+		Usage:  "file path for the drone config",
+		Value:  ".drone.yml",
+	},
+	cli.DurationFlag{
+		EnvVar: "DRONE_SESSION_EXPIRES",
+		Name:   "session-expires",
+		Usage:  "Set the session expiration time default 72h",
+		Value:  time.Hour * 72,
 	},
 	cli.StringSliceFlag{
 		EnvVar: "DRONE_ESCALATE",
@@ -354,6 +365,11 @@ var flags = []cli.Flag{
 		Usage:  "gitlab is running in private mode",
 	},
 	cli.BoolFlag{
+		EnvVar: "DRONE_GITLAB_V3_API",
+		Name:   "gitlab-v3-api",
+		Usage:  "gitlab is running the v3 api",
+	},
+	cli.BoolFlag{
 		EnvVar: "DRONE_STASH",
 		Name:   "stash",
 		Usage:  "stash driver is enabled",
@@ -523,11 +539,16 @@ func server(c *cli.Context) error {
 			return http.ListenAndServe(":http", handler)
 		})
 		g.Go(func() error {
-			return http.ListenAndServeTLS(
-				":https",
+			serve := &http.Server{
+				Addr:    ":https",
+				Handler: handler,
+				TLSConfig: &tls.Config{
+					NextProtos: []string{"http/1.1"}, // disable h2 because Safari :(
+				},
+			}
+			return serve.ListenAndServeTLS(
 				c.String("server-cert"),
 				c.String("server-key"),
-				handler,
 			)
 		})
 		return g.Wait()
@@ -552,42 +573,24 @@ func server(c *cli.Context) error {
 		if err != nil {
 			return err
 		}
-		if c.Bool("quic") {
-			dir := cacheDir()
-			os.MkdirAll(dir, 0700)
 
-			manager := autocert.Manager{
-				Prompt:     autocert.AcceptTOS,
-				HostPolicy: autocert.HostWhitelist(address.Host),
-				Cache:      autocert.DirCache(dir),
-			}
-			httpServer := &http.Server{
-				Addr:    ":443",
-				Handler: handler,
-				TLSConfig: &tls.Config{
-					GetCertificate: manager.GetCertificate,
-					NextProtos:     []string{"h2", "http/1.1"},
-				},
-			}
-			quicServer := &h2quic.Server{
-				Server: httpServer,
-			}
+		dir := cacheDir()
+		os.MkdirAll(dir, 0700)
 
-			quicServer.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				quicServer.SetQuicHeaders(w.Header())
-				handler.ServeHTTP(w, r)
-			})
-
-			conn, err := net.ListenPacket("udp", ":443")
-			if err != nil {
-				return err
-			}
-			g.Go(func() error {
-				return quicServer.Serve(conn)
-			})
-			return http.Serve(manager.Listener(), quicServer.Handler)
+		manager := autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(address.Host),
+			Cache:      autocert.DirCache(dir),
 		}
-		return http.Serve(autocert.NewListener(address.Host), handler)
+		serve := &http.Server{
+			Addr:    ":https",
+			Handler: handler,
+			TLSConfig: &tls.Config{
+				GetCertificate: manager.GetCertificate,
+				NextProtos:     []string{"http/1.1"}, // disable h2 because Safari :(
+			},
+		}
+		return serve.ListenAndServeTLS("", "")
 	})
 
 	return g.Wait()
@@ -613,6 +616,7 @@ func setupEvilGlobals(c *cli.Context, v store.Store, r remote.Remote) {
 	droneserver.Config.Services.Secrets = setupSecretService(c, v)
 	droneserver.Config.Services.Senders = sender.New(v, v)
 	droneserver.Config.Services.Environ = setupEnvironService(c, v)
+	droneserver.Config.Services.Limiter = setupLimiter(c, v)
 
 	if endpoint := c.String("gating-service"); endpoint != "" {
 		droneserver.Config.Services.Senders = sender.NewRemote(endpoint)
@@ -632,6 +636,8 @@ func setupEvilGlobals(c *cli.Context, v store.Store, r remote.Remote) {
 	droneserver.Config.Server.Pass = c.String("agent-secret")
 	droneserver.Config.Server.Host = strings.TrimRight(c.String("server-host"), "/")
 	droneserver.Config.Server.Port = c.String("server-addr")
+	droneserver.Config.Server.RepoConfig = c.String("repo-config")
+	droneserver.Config.Server.SessionExpires = c.Duration("session-expires")
 	droneserver.Config.Pipeline.Networks = c.StringSlice("network")
 	droneserver.Config.Pipeline.Volumes = c.StringSlice("volume")
 	droneserver.Config.Pipeline.Privileged = c.StringSlice("escalate")

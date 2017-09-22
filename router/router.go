@@ -12,7 +12,6 @@ import (
 	"github.com/drone/drone/server"
 	"github.com/drone/drone/server/debug"
 	"github.com/drone/drone/server/metrics"
-	"github.com/drone/drone/server/template"
 	"github.com/drone/drone/server/web"
 )
 
@@ -21,14 +20,6 @@ func Load(mux *httptreemux.ContextMux, middleware ...gin.HandlerFunc) http.Handl
 
 	e := gin.New()
 	e.Use(gin.Recovery())
-	e.SetHTMLTemplate(template.T)
-
-	// ui := server.NewWebsite()
-	// for _, path := range ui.Routes() {
-	// 	e.GET(path, func(c *gin.Context) {
-	// 		ui.File(c.Writer, c.Request)
-	// 	})
-	// }
 
 	e.Use(header.NoCache)
 	e.Use(header.Options)
@@ -80,7 +71,8 @@ func Load(mux *httptreemux.ContextMux, middleware ...gin.HandlerFunc) http.Handl
 		repo.GET("", server.GetRepo)
 		repo.GET("/builds", server.GetBuilds)
 		repo.GET("/builds/:number", server.GetBuild)
-		repo.GET("/logs/:number/:ppid/:proc", server.GetBuildLogs)
+		repo.GET("/logs/:number/:pid", server.GetProcLogs)
+		repo.GET("/logs/:number/:pid/:proc", server.GetBuildLogs)
 
 		repo.GET("/files/:number", server.FileList)
 		repo.GET("/files/:number/:proc/*file", server.FileGet)
@@ -104,6 +96,7 @@ func Load(mux *httptreemux.ContextMux, middleware ...gin.HandlerFunc) http.Handl
 		repo.DELETE("", session.MustRepoAdmin(), server.DeleteRepo)
 		repo.POST("/chown", session.MustRepoAdmin(), server.ChownRepo)
 		repo.POST("/repair", session.MustRepoAdmin(), server.RepairRepo)
+		repo.POST("/move", session.MustRepoAdmin(), server.MoveRepo)
 
 		repo.POST("/builds/:number", session.MustPush, server.PostBuild)
 		repo.DELETE("/builds/:number", session.MustAdmin(), server.ZombieKill)
@@ -120,17 +113,6 @@ func Load(mux *httptreemux.ContextMux, middleware ...gin.HandlerFunc) http.Handl
 
 	e.POST("/hook", server.PostHook)
 	e.POST("/api/hook", server.PostHook)
-
-	ws := e.Group("/ws")
-	{
-		ws.GET("/feed", server.EventStream)
-		ws.GET("/logs/:owner/:name/:build/:number",
-			session.SetRepo(),
-			session.SetPerm(),
-			session.MustPull,
-			server.LogStream,
-		)
-	}
 
 	sse := e.Group("/stream")
 	{

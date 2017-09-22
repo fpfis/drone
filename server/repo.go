@@ -27,6 +27,11 @@ func PostRepo(c *gin.Context) {
 		return
 	}
 
+	if err := Config.Services.Limiter.LimitRepo(user, repo); err != nil {
+		c.String(403, "Repository activation blocked by limiter")
+		return
+	}
+
 	repo.IsActive = true
 	repo.UserID = user.ID
 	if !repo.AllowPush && !repo.AllowPull && !repo.AllowDeploy && !repo.AllowTag {
@@ -40,7 +45,7 @@ func PostRepo(c *gin.Context) {
 		}
 	}
 	if repo.Config == "" {
-		repo.Config = ".drone.yml"
+		repo.Config = Config.Server.RepoConfig
 	}
 	if repo.Timeout == 0 {
 		repo.Timeout = 60 // 1 hour default build time
@@ -95,7 +100,7 @@ func PatchRepo(c *gin.Context) {
 		return
 	}
 
-	if (in.IsTrusted != nil || in.Timeout != nil) && !user.Admin {
+	if (in.IsTrusted != nil || in.Timeout != nil || in.BuildCounter != nil) && !user.Admin {
 		c.String(403, "Insufficient privileges")
 		return
 	}
@@ -132,6 +137,9 @@ func PatchRepo(c *gin.Context) {
 			c.String(400, "Invalid visibility type")
 			return
 		}
+	}
+	if in.BuildCounter != nil {
+		repo.Counter = *in.BuildCounter
 	}
 
 	err := store.UpdateRepo(c, repo)
@@ -184,7 +192,7 @@ func DeleteRepo(c *gin.Context) {
 	}
 
 	remote.Deactivate(user, repo, httputil.GetURL(c.Request))
-	c.Writer.WriteHeader(http.StatusOK)
+	c.JSON(200, repo)
 }
 
 func RepairRepo(c *gin.Context) {
@@ -192,7 +200,93 @@ func RepairRepo(c *gin.Context) {
 	repo := session.Repo(c)
 	user := session.User(c)
 
-	// crates the jwt token used to verify the repository
+	// creates the jwt token used to verify the repository
+	t := token.New(token.HookToken, repo.FullName)
+	sig, err := t.Sign(repo.Hash)
+	if err != nil {
+		c.String(500, err.Error())
+		return
+	}
+
+	// reconstruct the link
+	host := httputil.GetURL(c.Request)
+	link := fmt.Sprintf(
+		"%s/hook?access_token=%s",
+		host,
+		sig,
+	)
+
+	remote.Deactivate(user, repo, host)
+	err = remote.Activate(user, repo, link)
+	if err != nil {
+		c.String(500, err.Error())
+		return
+	}
+
+	from, err := remote.Repo(user, repo.Owner, repo.Name)
+	if err == nil {
+		repo.Name = from.Name
+		repo.Owner = from.Owner
+		repo.FullName = from.FullName
+		repo.Avatar = from.Avatar
+		repo.Link = from.Link
+		repo.Clone = from.Clone
+		repo.IsPrivate = from.IsPrivate
+		if repo.IsPrivate != from.IsPrivate {
+			repo.ResetVisibility()
+		}
+		store.UpdateRepo(c, repo)
+	}
+
+	c.Writer.WriteHeader(http.StatusOK)
+}
+
+func MoveRepo(c *gin.Context) {
+	remote := remote.FromContext(c)
+	repo := session.Repo(c)
+	user := session.User(c)
+
+	to, exists := c.GetQuery("to")
+	if !exists {
+		err := fmt.Errorf("Missing required to query value")
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+
+	owner, name, errParse := model.ParseRepo(to)
+	if errParse != nil {
+		c.AbortWithError(http.StatusInternalServerError, errParse)
+		return
+	}
+
+	from, err := remote.Repo(user, owner, name)
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	if !from.Perm.Admin {
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+
+	repo.Name = from.Name
+	repo.Owner = from.Owner
+	repo.FullName = from.FullName
+	repo.Avatar = from.Avatar
+	repo.Link = from.Link
+	repo.Clone = from.Clone
+	repo.IsPrivate = from.IsPrivate
+	if repo.IsPrivate != from.IsPrivate {
+		repo.ResetVisibility()
+	}
+
+	errStore := store.UpdateRepo(c, repo)
+	if errStore != nil {
+		c.AbortWithError(http.StatusInternalServerError, errStore)
+		return
+	}
+
+	// creates the jwt token used to verify the repository
 	t := token.New(token.HookToken, repo.FullName)
 	sig, err := t.Sign(repo.Hash)
 	if err != nil {

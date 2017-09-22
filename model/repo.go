@@ -1,5 +1,10 @@
 package model
 
+import (
+	"strings"
+	"fmt"
+)
+
 type RepoLite struct {
 	Owner    string `json:"owner"`
 	Name     string `json:"name"`
@@ -38,6 +43,25 @@ type Repo struct {
 	Perm        *Perm  `json:"-"                        meddler:"-"`
 }
 
+func (r *Repo) ResetVisibility() {
+	r.Visibility = VisibilityPublic
+	if r.IsPrivate {
+		r.Visibility = VisibilityPrivate
+	}
+}
+
+// ParseRepo parses the repository owner and name from a string.
+func ParseRepo(str string) (user, repo string, err error) {
+	var parts = strings.Split(str, "/")
+	if len(parts) != 2 {
+		err = fmt.Errorf("Error: Invalid or missing repository. eg octocat/hello-world.")
+		return
+	}
+	user = parts[0]
+	repo = parts[1]
+	return
+}
+
 // Update updates the repository with values from the given Repo.
 func (r *Repo) Update(from *Repo) {
 	r.Avatar = from.Avatar
@@ -57,13 +81,14 @@ func (r *Repo) Update(from *Repo) {
 
 // RepoPatch represents a repository patch object.
 type RepoPatch struct {
-	Config      *string `json:"config_file,omitempty"`
-	IsTrusted   *bool   `json:"trusted,omitempty"`
-	IsGated     *bool   `json:"gated,omitempty"`
-	Timeout     *int64  `json:"timeout,omitempty"`
-	Visibility  *string `json:"visibility,omitempty"`
-	AllowPull   *bool   `json:"allow_pr,omitempty"`
-	AllowPush   *bool   `json:"allow_push,omitempty"`
-	AllowDeploy *bool   `json:"allow_deploy,omitempty"`
-	AllowTag    *bool   `json:"allow_tag,omitempty"`
+	Config       *string `json:"config_file,omitempty"`
+	IsTrusted    *bool   `json:"trusted,omitempty"`
+	IsGated      *bool   `json:"gated,omitempty"`
+	Timeout      *int64  `json:"timeout,omitempty"`
+	Visibility   *string `json:"visibility,omitempty"`
+	AllowPull    *bool   `json:"allow_pr,omitempty"`
+	AllowPush    *bool   `json:"allow_push,omitempty"`
+	AllowDeploy  *bool   `json:"allow_deploy,omitempty"`
+	AllowTag     *bool   `json:"allow_tag,omitempty"`
+	BuildCounter *int    `json:"build_counter,omitempty"`
 }

@@ -42,7 +42,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 
   publish_server:
     image: plugins/docker
-    repo: gbo/drone
+    repo: gboo/drone
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
@@ -51,7 +51,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 
   publish_agent_amd64:
     image: plugins/docker
-    repo: gbo/drone-agent
+    repo: gboo/drone-agent
     dockerfile: Dockerfile.agent
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
@@ -61,7 +61,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 
   release_server:
     image: plugins/docker
-    repo: gbo/drone
+    repo: gboo/drone
     secrets: [ docker_username, docker_password ]
     tag: [ 0.8, 0.8.0 ]
     when:
@@ -69,7 +69,7 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0
 
   release_agent:
     image: plugins/docker
-    repo: gbo/drone-agent
+    repo: gboo/drone-agent
     dockerfile: Dockerfile.agent
     secrets: [ docker_username, docker_password ]
     tag: [ 0.8, 0.8.0 ]

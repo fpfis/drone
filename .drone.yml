@@ -32,43 +32,26 @@ pipeline:
 
   build:
     image: golang:1.8
-    commands: sh .drone.sh
-    secrets: [ ssh_key ]
+    commands:
+      - go build -ldflags '-extldflags "-static" -X github.com/drone/drone/version.VersionDev=build.'${DRONE_BUILD_NUMBER} -o release/drone-server github.com/drone/drone/extras/cmd/drone-server
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0         
+      - go build -ldflags '-X github.com/drone/drone/version.VersionDev=build.'${DRONE_BUILD_NUMBER} -o release/drone-agent github.com/drone/drone/cmd/drone-agent
+
     when:
       event: [ push, tag ]
 
   publish_server:
     image: plugins/docker
-    repo: drone/drone
+    repo: gbo/drone
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
       branch: master
       event: push
 
-  publish_agent_arm:
-    image: plugins/docker
-    repo: drone/agent
-    dockerfile: Dockerfile.agent.linux.arm
-    secrets: [ docker_username, docker_password ]
-    tag: [ linux-arm ]
-    when:
-      branch: master
-      event: push
-
-  publish_agent_arm64:
-    image: plugins/docker
-    repo: drone/agent
-    dockerfile: Dockerfile.agent.linux.arm64
-    secrets: [ docker_username, docker_password ]
-    tag: [ linux-arm64 ]
-    when:
-      branch: master
-      event: push
-
   publish_agent_amd64:
     image: plugins/docker
-    repo: drone/agent
+    repo: gbo/drone-agent
     dockerfile: Dockerfile.agent
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
@@ -78,7 +61,7 @@ pipeline:
 
   release_server:
     image: plugins/docker
-    repo: drone/drone
+    repo: gbo/drone
     secrets: [ docker_username, docker_password ]
     tag: [ 0.8, 0.8.0 ]
     when:
@@ -86,7 +69,7 @@ pipeline:
 
   release_agent:
     image: plugins/docker
-    repo: drone/agent
+    repo: gbo/drone-agent
     dockerfile: Dockerfile.agent
     secrets: [ docker_username, docker_password ]
     tag: [ 0.8, 0.8.0 ]

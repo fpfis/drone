@@ -217,10 +217,11 @@
 			"revisionTime": "2017-12-01T21:30:15Z"
 		},
 		{
-			"checksumSHA1": "ncGH2MfHDtM7/dNzj2i+lnXFnf4=",
+			"checksumSHA1": "iH0YL1U+Ot6sVyZ2AIUuG3o/BBE=",
+			"origin": "github.com/gboddin/pipeline/pipeline/frontend/yaml",
 			"path": "github.com/cncd/pipeline/pipeline/frontend/yaml",
-			"revision": "f8c48fc9fb9fd113c6e7dd941d63bb9f86a623cb",
-			"revisionTime": "2017-12-01T21:30:15Z"
+			"revision": "9c724e30b4dcb145afc9010904fbb86757c57508",
+			"revisionTime": "2017-12-05T20:19:21Z"
 		},
 		{
 			"checksumSHA1": "cdjOSSSS5Gzx7gRLNvObQvNJWYg=",
@@ -1242,5 +1243,5 @@
 			"revisionTime": "2015-01-19T16:55:52-02:00"
 		}
 	],
-	"rootPath": "github.com/drone/drone"
+	"rootPath": "github.com/gboddin/drone"
 }

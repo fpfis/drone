@@ -31,6 +31,9 @@ import (
 	"github.com/cncd/pipeline/pipeline/rpc"
 	"github.com/cncd/pubsub"
 	"github.com/cncd/queue"
+	"net/http"
+	"os"
+	"io/ioutil"
 )
 
 //
@@ -53,6 +56,7 @@ func GetQueueInfo(c *gin.Context) {
 }
 
 func PostHook(c *gin.Context) {
+
 	remote_ := remote.FromContext(c)
 
 	tmprepo, build, err := remote_.Hook(c.Request)
@@ -143,13 +147,39 @@ func PostHook(c *gin.Context) {
 		}
 	}
 
+	var confb []byte
 	// fetch the build file from the database
-	confb, err := remote.FileBackoff(remote_, user, repo, build, repo.Config)
+	repo_confb, err := remote.FileBackoff(remote_, user, repo, build, repo.Config)
+
 	if err != nil {
-		logrus.Errorf("error: %s: cannot find %s in %s: %s", repo.FullName, repo.Config, build.Ref, err)
-		c.AbortWithError(404, err)
-		return
+		// if failed, check if we have a fallback in the server config
+		if len(os.Getenv("DRONE_SERVER_YAML_FALLBACK")) > 0 {
+			// download it
+			resp, err := http.Get(fmt.Sprintf("%s?user=%s&repo=%s",
+				os.Getenv("DRONE_SERVER_YAML_FALLBACK"), user.Login, repo.FullName))
+			if err != nil {
+				logrus.Errorf("failure to get build config for %s. %s", repo.FullName, err)
+				c.AbortWithError(404, err)
+				return
+			}
+			defer resp.Body.Close()
+			fallback_confb, err := ioutil.ReadAll(resp.Body)
+
+			if err != nil {
+				logrus.Errorf("failure to get fallback build config %s for %s. %s",
+					os.Getenv("DRONE_SERVER_YAML_FALLBACK") , repo.FullName, err)
+				c.AbortWithError(404, err)
+				return
+			}
+			// Use fallback as config
+			confb = fallback_confb
+		}
+	} else {
+		// Use repo config
+		confb = repo_confb
 	}
+
+	// fetch the build file from the database
 	sha := shasum(confb)
 	conf, err := Config.Storage.Config.ConfigFind(repo, sha)
 	if err != nil {

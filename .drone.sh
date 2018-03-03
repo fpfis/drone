@@ -3,15 +3,7 @@
 # only execute this script as part of the pipeline.
 [ -z "$CI" ] && echo "missing ci environment variable" && exit 2
 
-# only execute the script when github token exists.
-[ -z "$SSH_KEY" ] && echo "missing ssh key" && exit 3
-
-# write the ssh key.
 mkdir /root/.ssh
-echo -n "$SSH_KEY" > /root/.ssh/id_rsa
-chmod 600 /root/.ssh/id_rsa
-
-# add github.com to our known hosts.
 touch /root/.ssh/known_hosts
 chmod 600 /root/.ssh/known_hosts
 ssh-keyscan -H github.com > /etc/ssh/ssh_known_hosts 2> /dev/null

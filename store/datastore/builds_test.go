@@ -15,6 +15,7 @@
 package datastore
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/drone/drone/model"
@@ -60,6 +61,11 @@ func TestBuilds(t *testing.T) {
 			g.Assert(build.ID != 0).IsTrue()
 			g.Assert(build.Number).Equal(1)
 			g.Assert(build.Commit).Equal("85f8c029b902ed9400bc600bac301a0aadb144ac")
+
+			count, err := s.GetBuildCount()
+			g.Assert(err == nil).IsTrue()
+			g.Assert(count > 0).IsTrue()
+			fmt.Println("GOT COUNT", count)
 		})
 
 		g.It("Should Put a Build", func() {

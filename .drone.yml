@@ -44,7 +44,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ alpine ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   publish_server:
@@ -53,7 +53,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   publish_agent_alpine:
@@ -63,7 +63,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ alpine ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   publish_agent_arm:
@@ -73,7 +73,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ linux-arm ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   publish_agent_arm64:
@@ -83,7 +83,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ linux-arm64 ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   publish_agent_amd64:
@@ -93,7 +93,7 @@ pipeline:
     secrets: [ docker_username, docker_password ]
     tag: [ latest ]
     when:
-      branch: gbo
+      branch: master
       event: push
 
   release_server_alpine:

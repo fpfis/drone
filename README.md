@@ -1,10 +1,21 @@
 ## Gbo's fork
 
-### Patches :
+### Patches
 
  - [Fallback to remote yaml when no .drone.yml found](https://github.com/drone/drone/compare/master...gboddin:feature/fallback-cleaned)
  - [Filter with refspec](https://github.com/drone/drone/compare/master...gboddin:feature/with-refspec-pipeline)
  - [OSS build](https://github.com/drone/drone/compare/master...gboddin:feature/drone-build-oss)
+
+### Images
+ - gboo/drone-server
+ - gboo/drone-agent
+ 
+### Fork disclaimer
+
+- Resolves user's specific needs
+- No support
+- Voids any Enterprise support
+- Licensing terms by Drone is still applies when using non-free work ( see source headers )
 
 Drone is a Continuous Delivery system built on container technology. Drone uses a simple YAML configuration file, a superset of docker-compose, to define and execute Pipelines inside Docker containers. 
 

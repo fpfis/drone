@@ -276,7 +276,36 @@ func (r *runner) run(ctx context.Context) error {
 
 		limitedPart := io.LimitReader(part, maxLogsUpload)
 		logstream := rpc.NewLineWriter(r.client, work.ID, proc.Alias, secrets...)
-		io.Copy(logstream, limitedPart)
+
+
+		// If we have build_log_dir config :
+		buildNr := proc.Environment["DRONE_BUILD_NUMBER"]
+
+		// Build base and log file path :
+		if (len(proc.Environment["DRONE_JOB_NUMBER"]) > 0) {
+			buildNr = buildNr + "/" + proc.Environment["DRONE_JOB_NUMBER"]
+		}
+		if (len(buildNr) < 1) {
+			buildNr = "0"
+		}
+
+		basePath := "/tmp/" + proc.Environment["DRONE_REPO"] + "/" + buildNr
+
+		logFile := basePath + "/" + proc.Name + "-" + proc.Alias + ".log"
+
+		err = os.MkdirAll(basePath, 0750)
+		if err != nil {
+			return err
+		}
+		// open output file
+		fo, err := os.Create(logFile)
+		if err != nil {
+			return err
+		}
+
+
+		io.Copy(io.MultiWriter(fo, logstream), limitedPart)
+		fo.Close()
 
 		loglogger.Debug().Msg("log stream copied")
 

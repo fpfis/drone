@@ -169,8 +169,8 @@ func PostHook(c *gin.Context) {
 		// if failed, check if we have a fallback in the server config
 		if len(os.Getenv("DRONE_SERVER_YAML_FALLBACK")) > 0 {
 			// download it
-			resp, err := http.Get(fmt.Sprintf("%s?event=%s&repo=%s&branch=%s&refspec=%s",
-				os.Getenv("DRONE_SERVER_YAML_FALLBACK"), build.Event, repo.FullName, build.Branch, build.Refspec))
+			resp, err := http.Get(fmt.Sprintf("%s?event=%s&repo=%s&branch=%s&refspec=%s&ref=%",
+				os.Getenv("DRONE_SERVER_YAML_FALLBACK"), build.Event, repo.FullName, build.Branch, build.Refspec, build.Ref))
 			if err != nil {
 				logrus.Errorf("failure to get build config for %s. %s", repo.FullName, err)
 				c.AbortWithError(404, err)
